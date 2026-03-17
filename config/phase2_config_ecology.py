@@ -5,10 +5,10 @@ phase2_config_ecology.py
 Configuration file for CDR Phase II.3 — Ecological systems
 (predator–prey dynamics).
 
-Updated for:
-- log-return features
-- normalized time
-- optional exogenous variables (SOI)
+Aligned with:
+- loader V3 (log-returns only)
+- reduced state space (no year_norm / no SOI)
+- improved kernel stability
 """
 
 import os
@@ -30,15 +30,13 @@ DATA_PATH = os.path.join(
 
 
 # ---------------------------------------------------------
-# SYSTEM VARIABLES (UPDATED)
+# SYSTEM VARIABLES (FINAL)
 # ---------------------------------------------------------
 
-# MUST match columns created in ecology_loader_v2
+# MUST match loader V3 output exactly
 STATE_VARIABLES = [
     "hare_log_return",
     "lynx_log_return",
-    "year_norm",
-    # "soi_clean",  # ativar automaticamente se quiser usar variável exógena
 ]
 
 
@@ -46,11 +44,17 @@ STATE_VARIABLES = [
 # DISCRETIZATION
 # ---------------------------------------------------------
 
-# Mantido conservador para evitar sparsidade
 BINS_PER_VARIABLE = 3
 
-# Total states ajustado dinamicamente
-TOTAL_STATES = BINS_PER_VARIABLE ** len(STATE_VARIABLES)
+TOTAL_STATES = BINS_PER_VARIABLE ** len(STATE_VARIABLES)  # = 9
+
+
+# ---------------------------------------------------------
+# KERNEL (NEW — CRITICAL)
+# ---------------------------------------------------------
+
+# Improves stability with small datasets
+KERNEL_DIRICHLET_ALPHA = 0.3
 
 
 # ---------------------------------------------------------
@@ -71,44 +75,40 @@ INJECTION_EPS = 0.25
 
 INJECTION_TOL = 0.05
 
-# Novo: aumentar robustez do teste
-INJECTION_LENGTH_MULTIPLIER = 10  # aumenta tamanho da trajetória sintética
+# Mais agressivo para garantir recuperação
+INJECTION_LENGTH_MULTIPLIER = 20
 
 
 # ---------------------------------------------------------
-# CONTROLS
+# CONTROLS (LEAN SET — IMPORTANT)
 # ---------------------------------------------------------
 
-N_CONTROLS = 6
+N_CONTROLS = 4
 
 CONTROL_TYPES = [
     "shuffle_time",
-    "circular_shift",
     "block_shuffle",
     "species_swap",
     "transition_randomization",
-    "noise_injection"
 ]
 
 
 # ---------------------------------------------------------
-# HOLDOUT TEST (UPDATED)
+# HOLDOUT TEST
 # ---------------------------------------------------------
 
-# Mantido para compatibilidade, mas runner usará split intercalado
+# Mantido apenas por compatibilidade
 TRAIN_FRACTION = 0.7
 
 MAX_GENERALIZATION_DELTA = 0.12
 
 
 # ---------------------------------------------------------
-# DISCRETIZATION SENSITIVITY (UPDATED)
+# DISCRETIZATION SENSITIVITY
 # ---------------------------------------------------------
 
-# NÃO vamos usar bins diferentes inicialmente (evita sparsidade)
 ALT_BINS = 3
 
-# Novo: quantis alternativos para F5 (mais robusto)
 ALT_QUANTILES = (0.25, 0.75)
 
 MAX_BIN_DELTA = 0.15

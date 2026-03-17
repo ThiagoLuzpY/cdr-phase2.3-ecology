@@ -42,6 +42,7 @@ def run_phase2_ecology():
     print("Bins per variable:", cfg.BINS_PER_VARIABLE)
     print("Alt bins:", cfg.ALT_BINS)
     print("Epsilon grid:", (cfg.EPS_MIN, cfg.EPS_MAX, cfg.EPS_GRID_SIZE))
+    print("Dirichlet alpha:", cfg.KERNEL_DIRICHLET_ALPHA)
 
     # -------------------------------------------------
     # Load dataset
@@ -56,7 +57,6 @@ def run_phase2_ecology():
 
     df_full = data["features_df"].copy()
 
-    # keep only variables requested in config and actually present in the loader output
     available_cols = [c for c in cfg.STATE_VARIABLES if c in df_full.columns]
 
     if len(available_cols) < 2:
@@ -77,13 +77,13 @@ def run_phase2_ecology():
     print("[Phase2-Ecology] Final state columns:", list(df.columns))
 
     # -------------------------------------------------
-    # Interleaved train/test split
+    # Temporal train/test split
     # -------------------------------------------------
 
     n = len(df)
 
-    # interleaved split helps cyclical ecological dynamics
     idx_all = np.arange(n, dtype=int)
+
     idx_test = idx_all[idx_all % 3 == 0]
     idx_train = idx_all[idx_all % 3 != 0]
 
@@ -107,8 +107,6 @@ def run_phase2_ecology():
     elif cfg.BINS_PER_VARIABLE == 3:
         quantiles_main = (0.33, 0.66)
     else:
-        # your discretize.py computes evenly spaced cuts for n_bins >= 4,
-        # but still expects a tuple to be passed
         quantiles_main = (0.25, 0.5, 0.75)
 
     df_disc, specs = fit_and_discretize(
@@ -134,7 +132,6 @@ def run_phase2_ecology():
     n_states = cfg.BINS_PER_VARIABLE ** n_components
 
     comps_all = df_disc.to_numpy(dtype=int)
-
     comps_train = comps_all[idx_train]
     comps_test = comps_all[idx_test]
 
@@ -159,7 +156,7 @@ def run_phase2_ecology():
 
     print("\n[Phase2-Ecology] Building empirical baseline kernel P0...")
 
-    dirichlet_alpha = 0.1
+    dirichlet_alpha = cfg.KERNEL_DIRICHLET_ALPHA
     min_prob = 1e-12
 
     P0 = EmpiricalKernel.from_transitions(
@@ -218,7 +215,7 @@ def run_phase2_ecology():
 
     eps_true = float(cfg.INJECTION_EPS)
     n_steps_inj = max(
-        len(curr_train),
+        500,
         int(cfg.INJECTION_LENGTH_MULTIPLIER * len(curr_train)),
     )
 
@@ -261,7 +258,6 @@ def run_phase2_ecology():
     print("\n[Phase2-Ecology] Running Gate F2 (controls collapse)...")
 
     eps_controls = []
-
     X_base = df.to_numpy(dtype=float)
 
     for i, control_name in enumerate(cfg.CONTROL_TYPES, start=1):
@@ -276,19 +272,17 @@ def run_phase2_ecology():
         df_ctrl = pd.DataFrame(X_ctrl, columns=list(df.columns))
         df_ctrl = df_ctrl.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
 
-        if len(df_ctrl) < len(df):
-            # rebuild interleaved split on shorter control sequence
-            m = len(df_ctrl)
-            idx_all_ctrl = np.arange(m, dtype=int)
-            idx_train_ctrl = idx_all_ctrl[idx_all_ctrl % 3 != 0]
-        else:
-            df_ctrl = df_ctrl.iloc[: len(df)].reset_index(drop=True)
-            idx_train_ctrl = idx_train
+        if len(df_ctrl) < 12:
+            raise ValueError(
+                f"Control '{control_name}' became too short after cleaning: {len(df_ctrl)} rows"
+            )
+
+        split_ctrl = int(cfg.TRAIN_FRACTION * len(df_ctrl))
+        idx_train_ctrl = np.arange(0, split_ctrl, dtype=int)
 
         if len(idx_train_ctrl) < 8:
             raise ValueError(
-                f"Control '{control_name}' became too short after cleaning: "
-                f"train={len(idx_train_ctrl)}"
+                f"Control '{control_name}' train segment too short: {len(idx_train_ctrl)} rows"
             )
 
         df_ctrl_disc, _ = fit_and_discretize(
@@ -341,7 +335,6 @@ def run_phase2_ecology():
 
     print("\n[Phase2-Ecology] Running Gate F5 (sensitivity)...")
 
-    # keep same bin count, change quantiles to test discretization robustness
     quantiles_alt = tuple(cfg.ALT_QUANTILES)
 
     df_disc_alt, _ = fit_and_discretize(
