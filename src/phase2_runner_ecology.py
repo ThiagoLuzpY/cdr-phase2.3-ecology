@@ -10,7 +10,7 @@ import pandas as pd
 
 import config.phase2_config_ecology as cfg
 
-from src.ecology_loader import load_lynx_hare_dataset, build_predator_prey_matrix
+from src.ecology_loader import load_lynx_hare_dataset
 from src.discretize import fit_and_discretize
 from src.build_states import make_encoding, encode_states, build_transitions
 from src.kernels.empirical_kernel import EmpiricalKernel
@@ -38,9 +38,10 @@ def run_phase2_ecology():
 
     print("[Phase2-Ecology] Configuration loaded")
     print("Dataset path:", cfg.DATA_PATH)
-    print("State variables:", tuple(cfg.STATE_VARIABLES))
+    print("Configured state variables:", tuple(cfg.STATE_VARIABLES))
     print("Bins per variable:", cfg.BINS_PER_VARIABLE)
     print("Alt bins:", cfg.ALT_BINS)
+    print("Epsilon grid:", (cfg.EPS_MIN, cfg.EPS_MAX, cfg.EPS_GRID_SIZE))
 
     # -------------------------------------------------
     # Load dataset
@@ -49,12 +50,23 @@ def run_phase2_ecology():
     print("\n[Phase2-Ecology] Loading lynx-hare dataset...")
 
     data = load_lynx_hare_dataset(cfg.DATA_PATH)
-    X = build_predator_prey_matrix(data)
 
-    df = pd.DataFrame(X, columns=list(cfg.STATE_VARIABLES))
+    if "features_df" not in data:
+        raise ValueError("Loader must return a dict with key 'features_df'.")
 
-    # Keep only the ecological variables and drop missing rows
-    df = df[list(cfg.STATE_VARIABLES)].replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
+    df_full = data["features_df"].copy()
+
+    # keep only variables requested in config and actually present in the loader output
+    available_cols = [c for c in cfg.STATE_VARIABLES if c in df_full.columns]
+
+    if len(available_cols) < 2:
+        raise ValueError(
+            f"Need at least 2 state variables. "
+            f"Configured={cfg.STATE_VARIABLES}, available={list(df_full.columns)}"
+        )
+
+    df = df_full[available_cols].copy()
+    df = df.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
 
     if len(df) < 12:
         raise ValueError(
@@ -62,25 +74,25 @@ def run_phase2_ecology():
         )
 
     print("[Phase2-Ecology] Rows after cleaning:", len(df))
-    print("[Phase2-Ecology] Columns:", list(df.columns))
+    print("[Phase2-Ecology] Final state columns:", list(df.columns))
 
     # -------------------------------------------------
-    # Train/Test split
+    # Interleaved train/test split
     # -------------------------------------------------
 
     n = len(df)
-    split = int(cfg.TRAIN_FRACTION * n)
 
-    if split < 6 or (n - split) < 4:
+    # interleaved split helps cyclical ecological dynamics
+    idx_all = np.arange(n, dtype=int)
+    idx_test = idx_all[idx_all % 3 == 0]
+    idx_train = idx_all[idx_all % 3 != 0]
+
+    if len(idx_train) < 8 or len(idx_test) < 4:
         raise ValueError(
-            f"Invalid split for ecology dataset: n={n}, split={split}. "
-            "Need enough rows for both train and test."
+            f"Invalid ecology split: train={len(idx_train)}, test={len(idx_test)}"
         )
 
-    idx_train = np.arange(0, split, dtype=int)
-    idx_test = np.arange(split, n, dtype=int)
-
-    print("\n[Phase2-Ecology] Train/Test split")
+    print("\n[Phase2-Ecology] Train/Test split (interleaved)")
     print("Train rows:", len(idx_train))
     print("Test rows:", len(idx_test))
 
@@ -95,7 +107,8 @@ def run_phase2_ecology():
     elif cfg.BINS_PER_VARIABLE == 3:
         quantiles_main = (0.33, 0.66)
     else:
-        # for >=4, your discretize.py ignores provided quantiles and computes evenly spaced cuts
+        # your discretize.py computes evenly spaced cuts for n_bins >= 4,
+        # but still expects a tuple to be passed
         quantiles_main = (0.25, 0.5, 0.75)
 
     df_disc, specs = fit_and_discretize(
@@ -112,6 +125,7 @@ def run_phase2_ecology():
     # -------------------------------------------------
 
     n_components = df_disc.shape[1]
+
     enc = make_encoding(
         n_components=n_components,
         n_bins=cfg.BINS_PER_VARIABLE,
@@ -119,19 +133,25 @@ def run_phase2_ecology():
 
     n_states = cfg.BINS_PER_VARIABLE ** n_components
 
-    comps = df_disc.to_numpy(dtype=int)
-    state_ids = encode_states(comps, enc)
+    comps_all = df_disc.to_numpy(dtype=int)
 
-    curr_all, nxt_all = build_transitions(state_ids)
+    comps_train = comps_all[idx_train]
+    comps_test = comps_all[idx_test]
 
-    curr_train = curr_all[: split - 1]
-    nxt_train = nxt_all[: split - 1]
+    state_ids_train = encode_states(comps_train, enc)
+    state_ids_test = encode_states(comps_test, enc)
 
-    curr_test = curr_all[split - 1 :]
-    nxt_test = nxt_all[split - 1 :]
+    curr_train, nxt_train = build_transitions(state_ids_train)
+    curr_test, nxt_test = build_transitions(state_ids_test)
 
-    print(f"[Phase2-Ecology] State space: {n_components} variables x {cfg.BINS_PER_VARIABLE} bins = {n_states} states")
-    print(f"[Phase2-Ecology] Transitions: train={len(curr_train)} | test={len(curr_test)}")
+    print(
+        f"[Phase2-Ecology] State space: "
+        f"{n_components} variables x {cfg.BINS_PER_VARIABLE} bins = {n_states} states"
+    )
+    print(
+        f"[Phase2-Ecology] Transitions: "
+        f"train={len(curr_train)} | test={len(curr_test)}"
+    )
 
     # -------------------------------------------------
     # Build empirical kernel P0
@@ -139,7 +159,6 @@ def run_phase2_ecology():
 
     print("\n[Phase2-Ecology] Building empirical baseline kernel P0...")
 
-    # Domain default consistent with previous Phase II runs
     dirichlet_alpha = 0.1
     min_prob = 1e-12
 
@@ -198,11 +217,17 @@ def run_phase2_ecology():
     print("\n[Phase2-Ecology] Running Gate F1 (injection recovery)...")
 
     eps_true = float(cfg.INJECTION_EPS)
+    n_steps_inj = max(
+        len(curr_train),
+        int(cfg.INJECTION_LENGTH_MULTIPLIER * len(curr_train)),
+    )
+
+    print("[Phase2-Ecology] Injection trajectory length:", n_steps_inj)
 
     sim_traj = _simulate_trajectory(
         P0,
         eps=eps_true,
-        n_steps=len(curr_train),
+        n_steps=n_steps_inj,
         seed=cfg.RANDOM_SEED,
     )
 
@@ -224,7 +249,10 @@ def run_phase2_ecology():
         tol_abs=float(cfg.INJECTION_TOL),
     )
 
-    print(f"[Phase2-Ecology] F1: eps_injected={eps_injected:.4f} vs eps_true={eps_true:.4f}")
+    print(
+        f"[Phase2-Ecology] F1: "
+        f"eps_injected={eps_injected:.4f} vs eps_true={eps_true:.4f}"
+    )
 
     # -------------------------------------------------
     # Gate F2 — Controls collapse
@@ -234,6 +262,8 @@ def run_phase2_ecology():
 
     eps_controls = []
 
+    X_base = df.to_numpy(dtype=float)
+
     for i, control_name in enumerate(cfg.CONTROL_TYPES, start=1):
         if control_name not in CONTROL_REGISTRY:
             raise KeyError(f"Unknown ecology control: {control_name}")
@@ -241,23 +271,25 @@ def run_phase2_ecology():
         print(f"[Phase2-Ecology] Control {i}/{len(cfg.CONTROL_TYPES)}: {control_name}")
 
         control_fn = CONTROL_REGISTRY[control_name]
-        X_ctrl = control_fn(df.to_numpy(dtype=float).copy(), rng)
+        X_ctrl = control_fn(X_base.copy(), rng)
 
-        df_ctrl = pd.DataFrame(X_ctrl, columns=list(cfg.STATE_VARIABLES))
+        df_ctrl = pd.DataFrame(X_ctrl, columns=list(df.columns))
         df_ctrl = df_ctrl.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
 
-        # Keep same train window size if possible
         if len(df_ctrl) < len(df):
+            # rebuild interleaved split on shorter control sequence
             m = len(df_ctrl)
-            split_ctrl = int(cfg.TRAIN_FRACTION * m)
-            idx_train_ctrl = np.arange(0, split_ctrl, dtype=int)
+            idx_all_ctrl = np.arange(m, dtype=int)
+            idx_train_ctrl = idx_all_ctrl[idx_all_ctrl % 3 != 0]
         else:
-            split_ctrl = split
-            idx_train_ctrl = idx_train
             df_ctrl = df_ctrl.iloc[: len(df)].reset_index(drop=True)
+            idx_train_ctrl = idx_train
 
-        if split_ctrl < 6:
-            raise ValueError(f"Control '{control_name}' became too short after cleaning.")
+        if len(idx_train_ctrl) < 8:
+            raise ValueError(
+                f"Control '{control_name}' became too short after cleaning: "
+                f"train={len(idx_train_ctrl)}"
+            )
 
         df_ctrl_disc, _ = fit_and_discretize(
             df_ctrl,
@@ -267,11 +299,10 @@ def run_phase2_ecology():
         )
 
         comps_ctrl = df_ctrl_disc.to_numpy(dtype=int)
-        ids_ctrl = encode_states(comps_ctrl, enc)
-        c_ctrl, n_ctrl = build_transitions(ids_ctrl)
+        comps_ctrl_train = comps_ctrl[idx_train_ctrl]
 
-        c_ctrl_train = c_ctrl[: split_ctrl - 1]
-        n_ctrl_train = n_ctrl[: split_ctrl - 1]
+        ids_ctrl_train = encode_states(comps_ctrl_train, enc)
+        c_ctrl_train, n_ctrl_train = build_transitions(ids_ctrl_train)
 
         eps_c, _ = _estimate_epsilon_grid(
             c_ctrl_train,
@@ -283,7 +314,7 @@ def run_phase2_ecology():
             progress_every=5,
         )
 
-        eps_controls.append(eps_c)
+        eps_controls.append(float(eps_c))
         print(f"  -> eps={eps_c:.4f}")
 
     gate2 = gate_F2_controls_collapse(
@@ -310,13 +341,8 @@ def run_phase2_ecology():
 
     print("\n[Phase2-Ecology] Running Gate F5 (sensitivity)...")
 
-    # Sensitivity test keeps same variables but changes discretization resolution
-    if cfg.ALT_BINS == 2:
-        quantiles_alt = (0.5,)
-    elif cfg.ALT_BINS == 3:
-        quantiles_alt = (0.33, 0.66)
-    else:
-        quantiles_alt = (0.25, 0.5, 0.75)
+    # keep same bin count, change quantiles to test discretization robustness
+    quantiles_alt = tuple(cfg.ALT_QUANTILES)
 
     df_disc_alt, _ = fit_and_discretize(
         df,
@@ -333,11 +359,10 @@ def run_phase2_ecology():
     n_states_alt = cfg.ALT_BINS ** n_components
 
     comps_alt = df_disc_alt.to_numpy(dtype=int)
-    ids_alt = encode_states(comps_alt, enc_alt)
-    c_alt, n_alt = build_transitions(ids_alt)
+    comps_alt_train = comps_alt[idx_train]
 
-    c_alt_train = c_alt[: split - 1]
-    n_alt_train = n_alt[: split - 1]
+    ids_alt_train = encode_states(comps_alt_train, enc_alt)
+    c_alt_train, n_alt_train = build_transitions(ids_alt_train)
 
     P0_alt = EmpiricalKernel.from_transitions(
         c_alt_train,
@@ -353,7 +378,7 @@ def run_phase2_ecology():
         P0_alt,
         eps_grid,
         min_prob,
-        label=f"bins{cfg.ALT_BINS}",
+        label="bins_alt",
         progress_every=5,
     )
 
@@ -390,7 +415,7 @@ def run_phase2_ecology():
 
     results = {
         "dataset_path": cfg.DATA_PATH,
-        "state_variables": list(cfg.STATE_VARIABLES),
+        "state_variables": list(df.columns),
         "n_rows_clean": int(len(df)),
         "n_states_main": int(n_states),
         "n_states_alt": int(n_states_alt),

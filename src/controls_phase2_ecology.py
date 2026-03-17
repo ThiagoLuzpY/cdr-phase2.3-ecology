@@ -4,11 +4,9 @@ controls_phase2_ecology.py
 
 Adversarial controls for Phase II.3 — Ecological dynamics.
 
-These controls perturb predator–prey time series to destroy
-true ecological structure while preserving marginal statistics.
-
-All controls operate on the continuous time-series matrix X
-before discretization.
+Updated for:
+- multi-variable state (hare, lynx, year, soi)
+- safer transformations
 """
 
 import numpy as np
@@ -19,12 +17,6 @@ import numpy as np
 # ---------------------------------------------------------
 
 def shuffle_time(X, rng):
-    """
-    Randomly permute time order.
-
-    Destroys temporal structure completely.
-    """
-
     idx = rng.permutation(len(X))
     return X[idx]
 
@@ -34,29 +26,24 @@ def shuffle_time(X, rng):
 # ---------------------------------------------------------
 
 def circular_shift(X, rng):
-    """
-    Shift time series by a random offset.
-    """
-
     shift = rng.integers(1, len(X) - 1)
     return np.roll(X, shift, axis=0)
 
 
 # ---------------------------------------------------------
-# CONTROL 3 — BLOCK SHUFFLE
+# CONTROL 3 — BLOCK SHUFFLE (IMPROVED)
 # ---------------------------------------------------------
 
 def block_shuffle(X, rng, block_size=5):
-    """
-    Shuffle blocks of time series to partially destroy
-    temporal dynamics while preserving local structure.
-    """
-
     n = len(X)
-    blocks = []
 
-    for i in range(0, n, block_size):
-        blocks.append(X[i:i + block_size])
+    if block_size >= n:
+        return shuffle_time(X, rng)
+
+    blocks = [
+        X[i:i + block_size]
+        for i in range(0, n, block_size)
+    ]
 
     rng.shuffle(blocks)
 
@@ -64,17 +51,23 @@ def block_shuffle(X, rng, block_size=5):
 
 
 # ---------------------------------------------------------
-# CONTROL 4 — SPECIES SWAP
+# CONTROL 4 — SPECIES SWAP (SAFE VERSION)
 # ---------------------------------------------------------
 
 def species_swap(X, rng):
     """
-    Swap predator and prey signals.
+    Swap ONLY ecological variables (first two columns).
 
-    Breaks ecological causality.
+    Assumes:
+    col 0 = hare_log_return
+    col 1 = lynx_log_return
     """
 
+    if X.shape[1] < 2:
+        return X
+
     X_swapped = X.copy()
+
     X_swapped[:, 0], X_swapped[:, 1] = X[:, 1], X[:, 0]
 
     return X_swapped
@@ -85,35 +78,33 @@ def species_swap(X, rng):
 # ---------------------------------------------------------
 
 def transition_randomization(X, rng):
-    """
-    Replace each state with a random draw from the
-    empirical distribution.
-
-    Preserves marginal distribution but destroys
-    temporal dependence.
-    """
-
     n = len(X)
-
     idx = rng.integers(0, n, size=n)
-
     return X[idx]
 
 
 # ---------------------------------------------------------
-# CONTROL 6 — NOISE INJECTION
+# CONTROL 6 — NOISE INJECTION (CONTROLLED)
 # ---------------------------------------------------------
 
 def noise_injection(X, rng, sigma=0.05):
     """
-    Add small gaussian noise.
+    Add Gaussian noise, but protect temporal structure variable.
 
-    Tests estimator robustness to small perturbations.
+    - noise only on biological variables
+    - reduces distortion of time axis (year_norm)
     """
 
-    noise = rng.normal(0, sigma, X.shape)
+    X_noisy = X.copy()
 
-    return X + noise
+    noise = rng.normal(0, sigma, size=X_noisy.shape)
+
+    # Apply noise only to first two columns (hare/lynx dynamics)
+    if X_noisy.shape[1] >= 2:
+        X_noisy[:, 0] += noise[:, 0]
+        X_noisy[:, 1] += noise[:, 1]
+
+    return X_noisy
 
 
 # ---------------------------------------------------------

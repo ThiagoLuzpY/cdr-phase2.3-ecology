@@ -2,13 +2,15 @@
 ecology_loader.py
 -----------------
 
-Loader for ecological predator–prey datasets.
+Loader for ecological predator–prey datasets (enhanced version).
 
-Currently supported dataset:
-- Hudson Bay Company Lynx–Hare dataset
+Enhancements:
+- Uses maximum available data
+- Adds log-returns (stationarity)
+- Adds normalized year
+- Optionally includes external variables (e.g., SOI)
 
-The loader returns raw time series ready for discretization
-by the standard CDR pipeline.
+Compatible with existing CDR pipeline.
 """
 
 import os
@@ -18,20 +20,13 @@ import numpy as np
 
 def load_lynx_hare_dataset(csv_path):
     """
-    Load the lynx-hare predator–prey dataset.
-
-    Parameters
-    ----------
-    csv_path : str
-        Path to the CSV file containing the dataset.
+    Load and enrich the lynx-hare predator–prey dataset.
 
     Returns
     -------
-    data : dict
-        Dictionary containing:
-            years : np.ndarray
-            hare : np.ndarray
-            lynx : np.ndarray
+    dict with:
+        years
+        features_df (DataFrame ready for discretization)
     """
 
     if not os.path.exists(csv_path):
@@ -39,62 +34,108 @@ def load_lynx_hare_dataset(csv_path):
             f"Lynx-Hare dataset not found at: {csv_path}"
         )
 
-    # === LEITURA CORRETA DO CSV (sep=';' é obrigatório) ===
+    # === READ CSV ===
     df = pd.read_csv(csv_path, sep=';')
 
-    # === NORMALIZAÇÃO FORTE DE COLUNAS ===
+    # === STRONG COLUMN NORMALIZATION ===
     df.columns = [
         str(c).strip()
-         .lower()
-         .replace(' ', '')
-         .replace('(monthly)', '')
-         .replace('(', '')
-         .replace(')', '')
-         .replace('_', '')
-         .replace(';', '')          # remove qualquer ; que sobrou
+        .lower()
+        .replace(' ', '')
+        .replace('(monthly)', '')
+        .replace('(', '')
+        .replace(')', '')
+        .replace('_', '')
+        .replace(';', '')
         for c in df.columns
     ]
 
-    print("Colunas após normalização:", list(df.columns))  # DEBUG
+    print("Colunas detectadas:", list(df.columns))
 
-    # Detecção robusta
-    hare_col = next((col for col in df.columns if 'hare' in col), None)
-    lynx_col = next((col for col in df.columns if 'lynx' in col), None)
-    year_col = next((col for col in df.columns if 'year' in col), None)
+    # === DETECT CORE COLUMNS ===
+    hare_col = next((c for c in df.columns if 'hare' in c), None)
+    lynx_col = next((c for c in df.columns if 'lynx' in c), None)
+    year_col = next((c for c in df.columns if 'year' in c), None)
 
-    if hare_col is None or lynx_col is None:
+    # Optional external variable
+    soi_col = next((c for c in df.columns if 'soi' in c), None)
+
+    if hare_col is None or lynx_col is None or year_col is None:
         raise ValueError(
-            f"Não encontrou 'hare' e 'lynx'. Colunas disponíveis: {list(df.columns)}"
+            f"Missing required columns. Found: {list(df.columns)}"
         )
 
-    # Conversão segura para float (ignora linhas ruins)
-    years = pd.to_numeric(df[year_col], errors='coerce').values
-    hare  = pd.to_numeric(df[hare_col],  errors='coerce').values
-    lynx  = pd.to_numeric(df[lynx_col],  errors='coerce').values
+    # === SAFE NUMERIC CONVERSION ===
+    df[year_col] = pd.to_numeric(df[year_col], errors='coerce')
+    df[hare_col] = pd.to_numeric(df[hare_col], errors='coerce')
+    df[lynx_col] = pd.to_numeric(df[lynx_col], errors='coerce')
 
-    # Remove linhas com NaN (caso existam)
-    mask = ~np.isnan(hare) & ~np.isnan(lynx)
-    years = years[mask]
-    hare  = hare[mask]
-    lynx  = lynx[mask]
+    if soi_col is not None:
+        df[soi_col] = pd.to_numeric(df[soi_col], errors='coerce')
 
-    print(f"Dataset carregado com sucesso: {len(years)} anos")
+    # === SORT BY YEAR ===
+    df = df.sort_values(by=year_col).reset_index(drop=True)
+
+    # === LOG TRANSFORM (avoid log(0)) ===
+    eps = 1e-6
+    df["hare_log"] = np.log(df[hare_col] + eps)
+    df["lynx_log"] = np.log(df[lynx_col] + eps)
+
+    # === LOG RETURNS (CORE FEATURE) ===
+    df["hare_log_return"] = df["hare_log"].diff()
+    df["lynx_log_return"] = df["lynx_log"].diff()
+
+    # === NORMALIZED YEAR ===
+    year_min = df[year_col].min()
+    year_max = df[year_col].max()
+
+    df["year_norm"] = (df[year_col] - year_min) / (year_max - year_min)
+
+    # === BUILD FEATURE SET ===
+    feature_cols = [
+        "hare_log_return",
+        "lynx_log_return",
+        "year_norm",
+    ]
+
+    # Add SOI only where available
+    if soi_col is not None:
+        df["soi_clean"] = df[soi_col]
+        feature_cols.append("soi_clean")
+
+    # === CLEAN ONLY NECESSARY COLUMNS ===
+    df_features = df[feature_cols].copy()
+
+    # Remove rows where core dynamics are missing
+    df_features = df_features.dropna(subset=[
+        "hare_log_return",
+        "lynx_log_return"
+    ])
+
+    # If SOI exists, drop rows only where SOI is missing (optional strict mode)
+    if "soi_clean" in df_features.columns:
+        df_features = df_features.dropna()
+
+    print(f"Total linhas após processamento: {len(df_features)}")
 
     return {
-        "years": years,
-        "hare": hare,
-        "lynx": lynx,
+        "years": df.loc[df_features.index, year_col].values,
+        "features_df": df_features
     }
 
 
 def build_predator_prey_matrix(data):
     """
-    Convert predator–prey time series into a matrix
-    suitable for discretization.
+    Convert processed features into matrix for discretization.
     """
-    hare = data["hare"]
-    lynx = data["lynx"]
 
-    X = np.column_stack([hare, lynx])
+    df = data["features_df"]
+
+    # mantém ordem consistente
+    cols = list(df.columns)
+
+    X = df[cols].to_numpy(dtype=float)
+
+    print(f"Matriz final construída com shape: {X.shape}")
 
     return X
