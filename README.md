@@ -1,11 +1,13 @@
 # Core Distinguishability Relativity (CDR)
 
+
 ## Status
 
 - **Phase I** ✅ **COMPLETE** (7/7 gates PASS)
 - **Phase II.1A** (Empirical validation – energy systems) ✅ **COMPLETE**
 - **Phase II.1B** (Empirical validation – neurodynamics) ✅ **COMPLETE**
 - **Phase II.2** (Human mobility systems) ✅ **COMPLETE**
+- **Phase II.3** (Ecological population dynamics) ✅ **COMPLETE**
 
 ---
 
@@ -38,7 +40,7 @@ The CDR validation program is divided into empirical phases.
 | **Phase II.1A** | Real-world validation on energy infrastructure | ✅ Complete |
 | **Phase II.1B** | Real-world validation on neural dynamics (fMRI) | ✅ Complete |
 | **Phase II.2** | Human mobility systems | ✅ Complete |
-| **Phase II.3** | Ecological population dynamics | 📋 Planned |
+| **Phase II.3** | Ecological population dynamics | ✅ Complete |
 | **Phase II.4** | Protein dynamics | 📋 Planned |
 | **Phase III** | Laboratory experiments (EEG + RNG) | 📋 Planned |
 
@@ -370,31 +372,173 @@ These results support the **cross-domain stability of the CDR estimation framewo
 
 ---
 
-## Future Validation Domains
+# 🔥 NEW — Phase II.3 — Ecological Dynamics (Completed)
 
-### Phase II.3 — Ecological Dynamics
-
-**Target systems:**
-```
-predator-prey systems
-ecological population cycles
-multi-species time series
-```
-
-**Objective:**
-```
-Test adaptive biological population systems
-```
-
-**Expected characteristics:**
-
-- Non-equilibrium dynamics
-- Feedback loops
-- Adaptive environmental coupling
-
-These systems may reveal **non-zero ε regimes** due to ecological interaction structures.
+🔗 **GitHub repository:**
+https://github.com/ThiagoLuzpY/cdr-phase2.3-ecology
 
 ---
+
+## Objective
+
+Apply the CDR framework to **biological dynamical systems**, specifically:
+
+
+predator-prey population dynamics
+
+
+This phase introduces systems with:
+
+- Non-linear feedback loops  
+- Cyclical dynamics  
+- Strong endogenous structure  
+
+---
+
+## Dataset
+
+```
+Hudson Bay Company Lynx–Hare dataset
+```
+
+---
+
+## System Representation
+
+Final state definition:
+
+```
+state = (hare_log_return, lynx_log_return)
+```
+
+---
+
+## Discretization
+
+```
+3 bins per variable
+3² = 9 states
+```
+
+---
+
+## Key Methodological Adjustments
+
+### 1. Dimensionality Correction
+
+Removed:
+
+```
+year_norm
+exogenous variables
+```
+
+Reason:
+
+```
+avoid sparsity
+preserve endogenous structure
+```
+
+---
+
+### 2. Temporal Strategy
+
+Used:
+
+```
+interleaved train/test split
+```
+
+Reason:
+
+```
+ecological systems are cyclical
+chronological split breaks phase consistency
+```
+
+---
+
+### 3. Control System (Final)
+
+```
+shuffle_time
+block_shuffle
+species_swap
+transition_randomization
+```
+
+---
+
+## Phase II.3 Results
+
+
+CDR Phase II.3 (Ecology)
+────────────────────────────────
+```
+F1_injection_recovery: PASS
+eps_hat: 0.275
+eps_true: 0.25
+abs_err: 0.025
+
+F2_controls_collapse: PASS
+median_eps_controls: 0.00
+fraction_below_tol: 1.0
+
+F3_holdout_generalization: PASS
+eps_train: 0.00
+eps_test: 0.00
+abs_delta: 0.00
+
+F5_sensitivity: PASS
+eps_binsA: 0.00
+eps_binsB: 0.00
+abs_delta: 0.00
+
+────────────────────────────────
+FINAL: PASS
+```
+
+---
+
+## Interpretation
+
+```
+ε ≈ 0
+```
+
+Meaning:
+
+- System is fully explained by internal dynamics  
+- No external reweighting required  
+- Strong structural determinism  
+
+---
+
+## Scientific Insight
+
+This confirms that:
+
+
+CDR correctly identifies endogenous structure in biological systems
+
+
+---
+
+## Updated Phase II Conclusions
+
+Across **four independent domains**:
+
+| Domain | Result |
+|--------|--------|
+| Energy infrastructure | ε ≈ 0 |
+| Neural dynamics | ε ≈ 0.06–0.08 |
+| Human mobility | ε ≈ 0 |
+| Ecological systems | ε ≈ 0 |
+
+---
+
+## Future Validation Domains
 
 ### Phase II.4 — Protein Dynamics
 
@@ -443,6 +587,7 @@ cdr-phase1-validation/
 │   ├── __init__.py
 │   ├── phase1_config.py
 │   ├── phase2_config.py
+│   ├── phase2_config_ecology.py
 │   ├── phase2_config_fmri.py
 │   └── phase2_config_mobility.py
 │
@@ -450,6 +595,7 @@ cdr-phase1-validation/
 │   ├── interim/
 │   ├── processed/
 │   └── raw/
+│       ├── ecology/
 │       ├── fmri/
 │       ├── geolife/
 │       └── opsp/
@@ -472,6 +618,7 @@ cdr-phase1-validation/
 │   │   ├── phase2_results.json
 │   │   ├── report.txt
 │   │   └── selection.json
+│   ├── phase2_ecology/
 │   ├── phase2_fmri/
 │   ├── phase2_mobility/
 │   └── .gitkeep
@@ -491,9 +638,11 @@ cdr-phase1-validation/
 │   ├── build_states.py
 │   ├── controls.py
 │   ├── controls_phase2.py
+│   ├── controls_phase2_ecology.py
 │   ├── controls_phase2_fmri.py
 │   ├── controls_phase2_mobility.py
 │   ├── discretize.py
+│   ├── ecology_loader.py
 │   ├── estimators.py
 │   ├── fmri_loader.py
 │   ├── geolife_loader.py
@@ -503,6 +652,7 @@ cdr-phase1-validation/
 │   ├── phase1_plus_runner.py
 │   ├── phase1_runner.py
 │   ├── phase2_runner.py
+│   ├── phase2_runner_ecology.py
 │   ├── phase2_runner_fmri.py
 │   ├── phase2_runner_mobility.py
 │   ├── statistics.py
@@ -545,11 +695,17 @@ python src/phase2_runner_fmri.py
 python src/phase2_runner_mobility.py
 ```
 
+**Ecology validation:**
+```bash
+python src/phase2_runner_ecology.py
+```
+
 **Results saved in:**
 ```
 results/phase2_opsp/
 results/phase2_fmri/
 results/phase2_mobility/
+results/phase2_ecology/
 ```
 
 ---
@@ -622,4 +778,4 @@ Thanks to the open scientific ecosystem:
 ---
 
 **Last updated:** March 2026  
-**Status:** Phase I complete ✅ | Phase II.1A complete ✅ | Phase II.1B complete ✅ | Phase II.2 complete ✅
+**Status:** Phase I complete ✅ | Phase II.1A complete ✅ | Phase II.1B complete ✅ | Phase II.2 complete ✅ | Phase II.3 complete ✅
